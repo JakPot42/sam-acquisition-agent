@@ -9,6 +9,8 @@ a tailored capability statement outline.
 Built for small defense-focused companies that currently spend 20+ hours per
 bid doing this manually.
 
+**Live demo:** https://sam-acquisition-agent.onrender.com
+
 > ⚠️ **Demonstration project.** AI analysis is illustrative and must be verified
 > against the official solicitation on SAM.gov before submitting any proposal.
 

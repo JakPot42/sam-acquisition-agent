@@ -1,0 +1,178 @@
+"""
+main.py — FastAPI routes for the SAM.gov Acquisition Intelligence Agent.
+
+Route map
+---------
+GET  /                          Search form
+GET  /search?q=...              Search results from SAM.gov
+GET  /opportunity/{notice_id}   Opportunity detail + Analyze button
+POST /analyze/{notice_id}       Run Claude analysis, redirect to result
+GET  /analysis/{analysis_id}    Compliance matrix view
+GET  /history                   Previously analyzed opportunities
+"""
+
+from __future__ import annotations
+
+import json
+from contextlib import asynccontextmanager
+
+from fastapi import Depends, FastAPI, Form, HTTPException, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from claude_analyst import AnalysisError, analyze_opportunity
+from config import APP_TITLE, DEMO_BANNER, DEMO_MODE
+from database import get_db, init_db
+from models import Analysis, Opportunity
+from sam_client import SAMAPIError, build_opportunity_text, get_opportunity, search_opportunities
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    init_db()
+    yield
+
+
+app = FastAPI(title=APP_TITLE, lifespan=lifespan)
+app.mount("/static", StaticFiles(directory="static"), name="static")
+templates = Jinja2Templates(directory="templates")
+templates.env.globals.update(
+    app_title=APP_TITLE,
+    demo_mode=DEMO_MODE,
+    demo_banner=DEMO_BANNER,
+)
+
+
+# --------------------------------------------------------------------------- #
+# Search
+# --------------------------------------------------------------------------- #
+@app.get("/", response_class=HTMLResponse)
+def index(request: Request):
+    return templates.TemplateResponse(request, "index.html", {})
+
+
+@app.get("/search", response_class=HTMLResponse)
+def search(request: Request, q: str = "", db: Session = Depends(get_db)):
+    if not q.strip():
+        return RedirectResponse(url="/")
+
+    error = None
+    opportunities = []
+    total = 0
+
+    try:
+        data = search_opportunities(q.strip())
+        opportunities = data.get("opportunitiesData", [])
+        total = data.get("totalRecords", 0)
+    except SAMAPIError as exc:
+        error = str(exc)
+
+    return templates.TemplateResponse(request, "results.html", {
+        "query": q,
+        "opportunities": opportunities,
+        "total": total,
+        "error": error,
+    })
+
+
+# --------------------------------------------------------------------------- #
+# Opportunity detail
+# --------------------------------------------------------------------------- #
+@app.get("/opportunity/{notice_id}", response_class=HTMLResponse)
+def opportunity_detail(notice_id: str, request: Request, db: Session = Depends(get_db)):
+    # Check cache first
+    opp_row = db.scalar(select(Opportunity).where(Opportunity.notice_id == notice_id))
+
+    if opp_row is None:
+        try:
+            raw = get_opportunity(notice_id)
+        except SAMAPIError as exc:
+            raise HTTPException(status_code=502, detail=str(exc))
+        if raw is None:
+            raise HTTPException(status_code=404, detail="Opportunity not found on SAM.gov.")
+
+        opp_row = Opportunity(
+            notice_id=notice_id,
+            title=raw.get("title", ""),
+            solicitation_number=raw.get("solicitationNumber"),
+            agency=raw.get("fullParentPathName") or raw.get("organizationHierarchy"),
+            naics_code=raw.get("naicsCode"),
+            set_aside=raw.get("typeOfSetAside"),
+            posted_date=raw.get("postedDate"),
+            response_deadline=raw.get("responseDeadLine"),
+            ui_link=raw.get("uiLink"),
+            description=raw.get("description"),
+            raw_json=json.dumps(raw),
+        )
+        db.add(opp_row)
+        db.commit()
+        db.refresh(opp_row)
+
+    return templates.TemplateResponse(request, "opportunity.html", {
+        "opp": opp_row,
+        "has_analysis": opp_row.latest_analysis is not None,
+        "analysis_id": opp_row.latest_analysis.id if opp_row.latest_analysis else None,
+    })
+
+
+# --------------------------------------------------------------------------- #
+# Analysis
+# --------------------------------------------------------------------------- #
+@app.post("/analyze/{notice_id}")
+def analyze(notice_id: str, request: Request, db: Session = Depends(get_db)):
+    opp_row = db.scalar(select(Opportunity).where(Opportunity.notice_id == notice_id))
+    if opp_row is None:
+        raise HTTPException(status_code=404, detail="Opportunity not in cache. View it first.")
+
+    raw_opp = json.loads(opp_row.raw_json) if opp_row.raw_json else {}
+    opp_text = build_opportunity_text(raw_opp)
+
+    try:
+        result = analyze_opportunity(opp_text)
+    except AnalysisError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+    analysis = Analysis(
+        opportunity_id=opp_row.id,
+        summary=result.get("summary"),
+        agency=result.get("agency"),
+        estimated_value=result.get("estimated_value"),
+        period_of_performance=result.get("period_of_performance"),
+        place_of_performance=result.get("place_of_performance"),
+        clearance_required=result.get("clearance_required"),
+        cmmc_level=result.get("cmmc_level"),
+        set_aside=result.get("set_aside"),
+        bottom_line=result.get("bottom_line"),
+        _key_requirements=json.dumps(result.get("key_requirements", [])),
+        _evaluation_criteria=json.dumps(result.get("evaluation_criteria", [])),
+        _compliance_flags=json.dumps(result.get("compliance_flags", [])),
+        _capability_bullets=json.dumps(result.get("capability_statement_bullets", [])),
+        raw_response=json.dumps(result),
+    )
+    db.add(analysis)
+    db.commit()
+    db.refresh(analysis)
+
+    return RedirectResponse(url=f"/analysis/{analysis.id}", status_code=303)
+
+
+@app.get("/analysis/{analysis_id}", response_class=HTMLResponse)
+def analysis_view(analysis_id: int, request: Request, db: Session = Depends(get_db)):
+    analysis = db.get(Analysis, analysis_id)
+    if analysis is None:
+        raise HTTPException(status_code=404, detail="Analysis not found.")
+    return templates.TemplateResponse(request, "analysis.html", {"analysis": analysis})
+
+
+# --------------------------------------------------------------------------- #
+# History
+# --------------------------------------------------------------------------- #
+@app.get("/history", response_class=HTMLResponse)
+def history(request: Request, db: Session = Depends(get_db)):
+    analyses = db.scalars(
+        select(Analysis).order_by(Analysis.created_at.desc()).limit(50)
+    ).all()
+    return templates.TemplateResponse(request, "history.html", {"analyses": analyses})

@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% set active = 'search' %}
+{% block title %}Search Opportunities &middot; {{ app_title }}{% endblock %}
+
+{% block content %}
+<div class="wrap wrap--narrow">
+  <div class="page-head">
+    <h2>Search Contract Opportunities</h2>
+    <p>Enter keywords to search SAM.gov's active solicitations. The agent will
+       retrieve matching opportunities and let you run a full AI compliance analysis
+       on any of them.</p>
+  </div>
+
+  <div class="card">
+    <form method="get" action="/search">
+      <div class="search-row">
+        <input type="text" name="q" class="search-input" autofocus
+               placeholder="e.g. cybersecurity IT support, CMMC assessment, network operations..."
+               required>
+        <button type="submit" class="btn btn-primary" id="search-btn"
+              onclick="this.textContent='Searching SAM.gov…'; this.disabled=true; this.form.submit()">
+        Search SAM.gov &rarr;
+      </button>
+      </div>
+      <div class="hint" style="margin-top:0.5rem">
+        Try: <a href="/search?q=cybersecurity">cybersecurity</a> &middot;
+             <a href="/search?q=cloud+infrastructure">cloud infrastructure</a> &middot;
+             <a href="/search?q=CMMC+assessment">CMMC assessment</a> &middot;
+             <a href="/search?q=software+development+Army">software development Army</a>
+      </div>
+    </form>
+  </div>
+
+  <div class="explainer">
+    <h3>How it works</h3>
+    <div class="steps">
+      <div class="step"><span class="step-n">1</span><div>Search SAM.gov for active solicitations by keyword.</div></div>
+      <div class="step"><span class="step-n">2</span><div>Select an opportunity to view its full details.</div></div>
+      <div class="step"><span class="step-n">3</span><div>Click <strong>Analyze with Claude</strong> — the AI reads the RFP and extracts requirements, compliance flags, and evaluation criteria.</div></div>
+      <div class="step"><span class="step-n">4</span><div>Review your compliance matrix and capability statement outline.</div></div>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -20,7 +20,15 @@
 
   {% if error %}
     <div class="alert alert-error">
-      <strong>SAM.gov API error:</strong> {{ error }}
+      <strong>SAM.gov unavailable:</strong> {{ error }}
+    </div>
+    <div class="card" style="margin-top:1rem">
+      <h3>Try demo data instead</h3>
+      <p>While the live API is unavailable, you can load pre-analyzed sample opportunities
+         to explore the full compliance matrix workflow.</p>
+      <form method="post" action="/seed" style="margin-top:0.75rem">
+        <button class="btn btn-primary" type="submit">Load Demo Opportunities &rarr;</button>
+      </form>
     </div>
   {% elif not opportunities %}
     <div class="empty-state">No active opportunities found for that query. Try different keywords.</div>

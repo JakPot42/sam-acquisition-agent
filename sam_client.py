@@ -51,9 +51,25 @@ def search_opportunities(
         response.raise_for_status()
         return response.json()
     except httpx.HTTPStatusError as exc:
-        raise SAMAPIError(f"SAM.gov API returned {exc.response.status_code}: {exc.response.text}") from exc
+        status = exc.response.status_code
+        if status == 429:
+            raise SAMAPIError(
+                "SAM.gov daily API quota reached. The free tier allows a limited number of "
+                "requests per day. Quota resets at midnight UTC — try again tomorrow, or "
+                "use the demo data below to explore the app in the meantime."
+            ) from exc
+        if status == 403:
+            raise SAMAPIError(
+                "SAM.gov API key rejected (403). Check that your SAM_API_KEY in .env matches "
+                "the Public API Key from your SAM.gov Account Details page."
+            ) from exc
+        raise SAMAPIError(f"SAM.gov API error {status} — try again in a moment.") from exc
+    except httpx.TimeoutException as exc:
+        raise SAMAPIError(
+            "SAM.gov API timed out (the public API can be slow). Try your search again."
+        ) from exc
     except httpx.RequestError as exc:
-        raise SAMAPIError(f"Could not reach SAM.gov API: {exc}") from exc
+        raise SAMAPIError(f"Could not reach SAM.gov: {exc}") from exc
 
 
 def get_opportunity(notice_id: str) -> dict | None:

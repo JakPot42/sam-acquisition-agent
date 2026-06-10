@@ -25,15 +25,62 @@ from sqlalchemy.orm import Session
 
 from claude_analyst import AnalysisError, analyze_opportunity
 from config import APP_TITLE, DEMO_BANNER, DEMO_MODE
-from database import get_db, init_db
+from database import SessionLocal, get_db, init_db
 from models import Analysis, Opportunity
 from sam_client import SAMAPIError, build_opportunity_text, get_opportunity, search_opportunities
 from seed_data import DEMO_ANALYSES, DEMO_OPPORTUNITIES
 
 
+def _load_seed_data(db: Session) -> None:
+    analysis_lookup = {a["notice_id"]: a for a in DEMO_ANALYSES}
+    for opp_data in DEMO_OPPORTUNITIES:
+        if db.scalar(select(Opportunity).where(Opportunity.notice_id == opp_data["notice_id"])):
+            continue
+        opp = Opportunity(
+            notice_id=opp_data["notice_id"],
+            title=opp_data["title"],
+            solicitation_number=opp_data.get("solicitation_number"),
+            agency=opp_data.get("agency"),
+            naics_code=opp_data.get("naics_code"),
+            set_aside=opp_data.get("set_aside"),
+            posted_date=opp_data.get("posted_date"),
+            response_deadline=opp_data.get("response_deadline"),
+            ui_link=opp_data.get("ui_link"),
+            description=opp_data.get("description"),
+            raw_json=json.dumps(opp_data),
+        )
+        db.add(opp)
+        db.flush()
+        if opp_data["notice_id"] in analysis_lookup:
+            a = analysis_lookup[opp_data["notice_id"]]
+            db.add(Analysis(
+                opportunity_id=opp.id,
+                summary=a.get("summary"),
+                agency=a.get("agency"),
+                estimated_value=a.get("estimated_value"),
+                period_of_performance=a.get("period_of_performance"),
+                place_of_performance=a.get("place_of_performance"),
+                clearance_required=a.get("clearance_required"),
+                cmmc_level=a.get("cmmc_level"),
+                set_aside=a.get("set_aside"),
+                bottom_line=a.get("bottom_line"),
+                _key_requirements=json.dumps(a.get("key_requirements", [])),
+                _evaluation_criteria=json.dumps(a.get("evaluation_criteria", [])),
+                _compliance_flags=json.dumps(a.get("compliance_flags", [])),
+                _capability_bullets=json.dumps(a.get("capability_bullets", [])),
+                raw_response=json.dumps(a),
+            ))
+    db.commit()
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     init_db()
+    db = SessionLocal()
+    try:
+        _load_seed_data(db)
+    finally:
+        db.close()
     yield
 
 
@@ -185,47 +232,5 @@ def history(request: Request, db: Session = Depends(get_db)):
 @app.post("/seed")
 def seed(db: Session = Depends(get_db)):
     """Load pre-built demo opportunities and analyses (idempotent)."""
-    analysis_lookup = {a["notice_id"]: a for a in DEMO_ANALYSES}
-
-    for opp_data in DEMO_OPPORTUNITIES:
-        if db.scalar(select(Opportunity).where(Opportunity.notice_id == opp_data["notice_id"])):
-            continue
-
-        opp = Opportunity(
-            notice_id=opp_data["notice_id"],
-            title=opp_data["title"],
-            solicitation_number=opp_data.get("solicitation_number"),
-            agency=opp_data.get("agency"),
-            naics_code=opp_data.get("naics_code"),
-            set_aside=opp_data.get("set_aside"),
-            posted_date=opp_data.get("posted_date"),
-            response_deadline=opp_data.get("response_deadline"),
-            ui_link=opp_data.get("ui_link"),
-            description=opp_data.get("description"),
-            raw_json=json.dumps(opp_data),
-        )
-        db.add(opp)
-        db.flush()
-
-        if opp_data["notice_id"] in analysis_lookup:
-            a = analysis_lookup[opp_data["notice_id"]]
-            db.add(Analysis(
-                opportunity_id=opp.id,
-                summary=a.get("summary"),
-                agency=a.get("agency"),
-                estimated_value=a.get("estimated_value"),
-                period_of_performance=a.get("period_of_performance"),
-                place_of_performance=a.get("place_of_performance"),
-                clearance_required=a.get("clearance_required"),
-                cmmc_level=a.get("cmmc_level"),
-                set_aside=a.get("set_aside"),
-                bottom_line=a.get("bottom_line"),
-                _key_requirements=json.dumps(a.get("key_requirements", [])),
-                _evaluation_criteria=json.dumps(a.get("evaluation_criteria", [])),
-                _compliance_flags=json.dumps(a.get("compliance_flags", [])),
-                _capability_bullets=json.dumps(a.get("capability_bullets", [])),
-                raw_response=json.dumps(a),
-            ))
-
-    db.commit()
+    _load_seed_data(db)
     return RedirectResponse(url="/history", status_code=303)

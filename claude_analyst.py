@@ -67,7 +67,7 @@ def analyze_opportunity(opportunity_text: str) -> dict:
                 "content": _PROMPT.format(opportunity_text=opportunity_text),
             }],
         )
-    except anthropic.APIError as exc:
+    except Exception as exc:
         raise AnalysisError(f"Anthropic API error: {exc}") from exc
 
     raw = response.content[0].text.strip()
